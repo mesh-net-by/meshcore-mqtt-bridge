@@ -19,7 +19,8 @@ services:
         max-file: "3"
 
   ingestor:
-    build: .
+    # build: .
+    image: ghcr.io/mesh-net-by/meshcore-mqtt-potato-mesh-ingestor:latest
     restart: unless-stopped
     env_file: .env
     depends_on:
