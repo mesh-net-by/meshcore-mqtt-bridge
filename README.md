@@ -1,4 +1,4 @@
-# meshcore-potato-ingestor
+# meshcore-mqtt-bridge
 
 Reads MeshCore node data from an MQTT broker and forwards it to pluggable
 sinks. Built-in sink: a [potato-mesh](https://github.com/l5yth/potato-mesh) map
@@ -53,7 +53,7 @@ ensure each message is processed by exactly one replica.
 
 ```bash
 git clone <this-repo>
-cd meshcore-observer-potato-mesh-ingestor
+cd meshcore-mqtt-bridge
 cp .env.example .env   # then edit .env
 ```
 

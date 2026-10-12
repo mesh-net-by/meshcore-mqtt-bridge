@@ -1,7 +1,7 @@
 [project]
-name = "meshcore-potato-ingestor"
+name = "meshcore-mqtt-bridge"
 version = "0.1.0"
-description = "MeshCore MQTT → potato-mesh ingestor"
+description = "MeshCore MQTT bridge to potato-mesh, Telegram and other sinks"
 requires-python = ">=3.11"
 dependencies = [
     "aiomqtt>=2.3.0",

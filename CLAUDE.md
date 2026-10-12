@@ -1,4 +1,4 @@
-# MeshCore → potato-mesh MQTT Ingestor
+# MeshCore MQTT Bridge
 
 ## What This Is
 
