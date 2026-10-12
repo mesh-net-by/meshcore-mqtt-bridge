@@ -65,10 +65,10 @@ Key variables in `.env`:
 | `SINKS` | Comma-separated sinks to enable (default `potato`) |
 | `POTATO_HOST` | potato sink: potato-mesh base URL, e.g. `https://map.example.com` |
 | `POTATO_API_TOKEN` | potato sink: potato-mesh API bearer token |
+| `POTATO_INGESTOR_NAME` | potato sink: name shown in potato-mesh ingestors list |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | telegram sink: bot token from @BotFather and target chat id |
 | `TELEGRAM_CHANNELS_RAW` | telegram sink: channel names to forward, e.g. `news,test`. Empty = all decrypted channels |
 | `TELEGRAM_FORMAT` | telegram sink: message template, see [Telegram Sink](#telegram-sink) |
-| `INGESTOR_NAME` | Name shown in potato-mesh ingestors list |
 | `CHANNELS_RAW` | Comma-separated channel names to forward, e.g. `test,news`. Empty = all public channels |
 | `REPEATER_NODE_ID` | Optional: repeater node id (e.g. `!3c15e67e`) for heartbeat before first status arrives |
 

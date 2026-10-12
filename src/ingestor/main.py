@@ -108,7 +108,7 @@ async def _retain_cleanup_loop() -> None:
 
 async def run() -> None:
     bus = EventBus(build_sinks(settings.enabled_sinks))
-    log.info("starting", ingestor=settings.ingestor_name, topic=settings.mqtt_shared_topic,
+    log.info("starting", topic=settings.mqtt_shared_topic,
              sinks=[sink.name for sink in bus.sinks])
 
     await _prefetch_lora_info()

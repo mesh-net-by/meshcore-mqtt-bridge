@@ -22,11 +22,12 @@ class Settings(BaseSettings):
 
     # Comma-separated sinks that receive events, e.g. "potato" or "potato,telegram"
     sinks: str = "potato"
-    ingestor_name: str = "mqtt-ingestor"
 
     # potato-mesh sink (required when "potato" is in SINKS)
     potato_host: str = ""
     potato_api_token: str = ""
+    # Name shown in the potato-mesh ingestors list
+    potato_ingestor_name: str = "mqtt-ingestor"
 
     # Telegram sink (required when "telegram" is in SINKS)
     telegram_bot_token: str = ""

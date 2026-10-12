@@ -70,7 +70,7 @@ class PotatoSink(Sink):
 
     @staticmethod
     def _tag(data: dict) -> dict:
-        return {**data, "protocol": "meshcore", "ingestor": settings.ingestor_name}
+        return {**data, "protocol": "meshcore", "ingestor": settings.potato_ingestor_name}
 
     async def _send_node(self, node_id: str, data: dict) -> None:
         await self._post("/api/nodes", {node_id: self._tag(data)})
