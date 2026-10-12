@@ -175,9 +175,11 @@ Each MQTT message is delivered to exactly one replica — no duplicate processin
 Forwards decrypted channel messages to a Telegram chat. Default message:
 
 ```
-#news · ALEX KORO
-Potato
-KORO MW RPT · SNR 4.0 · RSSI -80
+👤 ALEX KORO (b57eb3e8)
+📡 #news
+📶 Signal: SNR: -9.0dB / RSSI: -71dBm
+
+💬 Text: Potato
 ```
 
 Enable with `SINKS=potato,telegram` (or `telegram`
@@ -196,17 +198,17 @@ alone).
 
 | Placeholder | Value |
 |---|---|
-| `{channel}` | channel name without `#` |
+| `{channel}` | channel label: `#news` for hashtag channels, `Public` for the Public channel |
 | `{sender}` | sender display name |
 | `{text}` | message body |
 | `{repeater}` | name of the repeater that heard it (empty until its first `status`) |
 | `{snr}` / `{rssi}` | signal quality, e.g. `4.0` / `-80` |
 | `{freq}` / `{preset}` | LoRa frequency in MHz / preset, e.g. `869.618` / `SF8/BW62.5/CR8` |
 | `{time}` | reception time, UTC `HH:MM:SS UTC` |
-| `{from_id}` | sender node id, e.g. `!aabbccdd` |
+| `{from_id}` | sender node id without the `!`, e.g. `aabbccdd` |
 
-A line whose placeholders are all empty is dropped, and a separator left
-dangling by an empty field is trimmed. An unknown placeholder fails fast at
+A line whose placeholders are all empty is dropped, a separator left
+dangling by an empty field is trimmed, and literal blank lines are kept. An unknown placeholder fails fast at
 startup. Example: `TELEGRAM_FORMAT={time} <b>{sender}</b>: {text}`.
 
 Messages that could not be decrypted (unknown channel key) are never sent. The

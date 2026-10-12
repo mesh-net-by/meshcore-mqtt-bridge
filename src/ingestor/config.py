@@ -2,9 +2,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEFAULT_TELEGRAM_FORMAT = (
-    "<b>#{channel}</b> · {sender}\n"
-    "{text}\n"
-    "<i>{repeater} · SNR {snr} · RSSI {rssi}</i>"
+    "👤 {sender} ({from_id})\n"
+    "📡 {channel}\n"
+    "📶 Signal: SNR: {snr}dB / RSSI: {rssi}dBm\n"
+    "\n"
+    "💬 Text: {text}"
 )
 
 

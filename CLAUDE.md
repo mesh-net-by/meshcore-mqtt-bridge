@@ -292,8 +292,8 @@ event → API mapping, the 60 s `/api/ingestors` heartbeat. `POTATO_HOST` and
 `sinks/telegram.py` (`TelegramSink`) talks to the Telegram Bot API via `httpx`
 (no extra dependency). It forwards only `ChatMessage` events with non-empty
 `text`, optionally filtered by `TELEGRAM_CHANNELS_RAW`, formatted as HTML
-(template from `TELEGRAM_FORMAT`, default `<b>#{channel}</b> · {sender}\n{text}\n<i>{repeater} · SNR {snr} · RSSI {rssi}</i>`;
-placeholder values are `html.escape`d; lines with all-empty placeholders are dropped; the
+(template from `TELEGRAM_FORMAT`, default `👤 {sender} ({from_id})\n📡 {channel}\n📶 Signal: SNR: {snr}dB / RSSI: {rssi}dBm\n\n💬 Text: {text}`;
+placeholder values are `html.escape`d; lines with all-empty placeholders are dropped; literal blank lines are kept; the
 message body is never altered by separator cleanup; unknown placeholders raise at startup), deduplicated by
 `msg_id` (bounded in-memory cache), serialized with a lock and one retry on HTTP
 429. The bot token lives in the request URL: never log URLs or use

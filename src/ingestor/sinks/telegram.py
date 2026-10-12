@@ -34,9 +34,16 @@ def _parse_template(template: str) -> list[str]:
     return template.split("\n")
 
 
+def _channel_label(name: str) -> str:
+    """'#news' for hashtag channels, plain 'Public' for the fixed Public channel."""
+    if not name or name.lower() == "public":
+        return name
+    return f"#{name}"
+
+
 def _fields(event: ChatMessage) -> dict[str, str]:
     values = {
-        "channel": event.channel_name,
+        "channel": _channel_label(event.channel_name),
         "sender": event.sender,
         "text": event.text[:MAX_TEXT_LEN],
         "repeater": event.repeater,
@@ -45,33 +52,45 @@ def _fields(event: ChatMessage) -> dict[str, str]:
         "freq": f"{event.lora_freq:.3f}" if event.lora_freq is not None else "",
         "preset": event.modem_preset or "",
         "time": datetime.fromtimestamp(event.rx_time, timezone.utc).strftime("%H:%M:%S UTC"),
-        "from_id": event.from_id,
+        "from_id": event.from_id.removeprefix("!"),
     }
     return {k: html.escape(v) for k, v in values.items()}
 
 
 def render(lines: list[str], event: ChatMessage) -> str:
     """Fill the template line by line. A line whose placeholders are all empty is
-    dropped, and separators left dangling by an empty field are trimmed."""
+    dropped, separators left dangling by an empty field are trimmed, and literal
+    blank lines are kept (collapsed, never leading or trailing)."""
     values = _fields(event)
-    out = []
+    out: list[str] = []
     for line in lines:
         names = _PLACEHOLDER.findall(line)
-        if names and not any(values[n] for n in names):
+        if not names:
+            out.append(line)
+            continue
+        if not any(values[n] for n in names):
             continue
         rendered = _PLACEHOLDER.sub(lambda m: values[m.group(1)], line)
         if "text" not in names:  # never alter the message body itself
             rendered = _clean_separators(rendered)
         if rendered:
             out.append(rendered)
-    return "\n".join(out)
+
+    result: list[str] = []
+    for line in out:
+        if line == "" and (not result or result[-1] == ""):
+            continue
+        result.append(line)
+    while result and result[-1] == "":
+        result.pop()
+    return "\n".join(result)
 
 
 def _clean_separators(line: str) -> str:
     line = re.sub(r"(<[^>/]+>)\s*·\s*", r"\1", line)           # "<i> · x" -> "<i>x"
     line = re.sub(r"\s*·\s*(</[^>]+>)", r"\1", line)           # "x · </i>" -> "x</i>"
     line = re.sub(r"(?:\s·\s){2,}", " · ", line)               # "a ·  · b" -> "a · b"
-    return line.strip(" ·\t")
+    return line.strip(" ·\t").rstrip(" -")
 
 
 def _channel_key(name: str) -> str:
