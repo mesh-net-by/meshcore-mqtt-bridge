@@ -1,5 +1,5 @@
 """
-Map decoded MeshCore payload objects to potato-mesh API calls.
+Map decoded MeshCore payload objects to bridge events.
 """
 
 import hashlib
@@ -8,14 +8,28 @@ import time
 
 import structlog
 
+from .bus import EventBus
 from .config import settings
-from .potato_client import PotatoClient
+from .events import ChatMessage, NodeAdvert, RepeaterStatus, format_chat_text
+from .state import state
 
 log = structlog.get_logger()
 
 # In-memory cache: lowercased display name → canonical node_id (!deadbeef)
 # Populated from Advert packets; used to resolve GroupText senders.
 _name_to_node_id: dict[str, str] = {}
+
+# Repeater display names by lowercased device id, learned from `status` messages.
+_repeater_names: dict[str, str] = {}
+
+
+def repeater_name(device_id: str) -> str:
+    """Name of the repeater behind an MQTT device_id; with a single known repeater
+    that is the answer even if the topic id and status origin_id differ in format."""
+    name = _repeater_names.get(device_id.lower())
+    if name is None and len(_repeater_names) == 1:
+        name = next(iter(_repeater_names.values()))
+    return name or ""
 
 
 def _meshcore_synthetic_node_id(name: str) -> str:
@@ -62,15 +76,14 @@ DEVICE_ROLE_MAP = {
 }
 
 
-async def handle_status(payload: dict, client: PotatoClient) -> None:  # noqa: C901
-    """Repeater's own status → node + telemetry."""
+async def handle_status(payload: dict, bus: EventBus) -> None:
+    """Repeater's own status -> RepeaterStatus event."""
     origin_id = payload.get("origin_id", "")
     if not origin_id:
         return
 
     node_id = _node_id(origin_id)
     stats = payload.get("stats", {})
-    now = int(time.time())
 
     radio_raw = payload.get("radio", "")
     lora_freq = None
@@ -88,36 +101,28 @@ async def handle_status(payload: dict, client: PotatoClient) -> None:  # noqa: C
     voltage = (battery_mv / 1000.0) if battery_mv is not None else stats.get("battery_voltage")
     uptime = stats.get("uptime_secs") or stats.get("uptime")
 
-    await client.set_repeater_node_id(node_id)
-    await client.set_repeater_lora_info(lora_freq, modem_preset)
+    state.repeater_node_id = node_id
+    state.lora_freq = lora_freq
+    state.modem_preset = modem_preset
 
     long_name = payload.get("origin", "")
-    short_name = long_name[:4] if long_name else ""
+    if long_name:
+        _repeater_names[origin_id.lower()] = long_name
 
-    await client.send_node(node_id, {
-        "user": {"role": "REPEATER", "longName": long_name, "shortName": short_name},
-        "deviceMetrics": {"voltage": voltage, "uptimeSeconds": uptime},
-        "lastHeard": now,
-        "lora_freq": lora_freq,
-        "modem_preset": modem_preset,
-    })
-
-    if voltage is not None:
-        await client.send_telemetry({
-            "from_id": node_id,
-            "rx_time": now,
-            "decoded": {
-                "portnum": "TELEMETRY_APP",
-                "telemetry": {
-                    "time": now,
-                    "deviceMetrics": {"voltage": voltage, "uptimeSeconds": uptime},
-                },
-            },
-        })
+    await bus.publish(RepeaterStatus(
+        node_id=node_id,
+        name=long_name,
+        short_name=long_name[:4] if long_name else "",
+        voltage=voltage,
+        uptime_secs=uptime,
+        lora_freq=lora_freq,
+        modem_preset=modem_preset,
+        timestamp=int(time.time()),
+    ))
 
 
-async def handle_advert(advert, rx_time: int, snr: float, rssi: int, client: PotatoClient) -> None:
-    """AdvertPayload → node info + position."""
+async def handle_advert(advert, rx_time: int, snr: float, rssi: int, bus: EventBus) -> None:
+    """AdvertPayload -> NodeAdvert event."""
     if advert is None or not advert.is_valid:
         return
 
@@ -134,42 +139,37 @@ async def handle_advert(advert, rx_time: int, snr: float, rssi: int, client: Pot
 
     short_name = app_data.get("short_name", "") or (name[:4] if name else "")
 
-    # Cache name → node_id so GroupText sender lookup works
+    # Cache name -> node_id so GroupText sender lookup works
     if name and node_id != "!unknown":
         _name_to_node_id[name.lower()] = node_id
 
-    node_data: dict = {
-        "user": {"role": role, "longName": name, "shortName": short_name, "publicKey": public_key},
-        "lastHeard": rx_time,
-        "snr": snr,
-        "rssi": rssi,
-        "lora_freq": client.lora_freq,
-        "modem_preset": client.modem_preset,
-    }
-
+    lat = lon = None
     if app_data.get("has_location"):
         loc = app_data.get("location", {})
         lat = loc.get("latitude")
         lon = loc.get("longitude")
-        if lat is not None and lon is not None:
-            node_data["position"] = {"latitude": lat, "longitude": lon}
-            await client.send_position({
-                "from_id": node_id,
-                "rx_time": rx_time,
-                "latitude": lat,
-                "longitude": lon,
-                "snr": snr,
-                "rssi": rssi,
-            })
 
-    await client.send_node(node_id, node_data)
+    await bus.publish(NodeAdvert(
+        node_id=node_id,
+        role=role,
+        name=name,
+        short_name=short_name,
+        public_key=public_key,
+        rx_time=rx_time,
+        snr=snr,
+        rssi=rssi,
+        lora_freq=state.lora_freq,
+        modem_preset=state.modem_preset,
+        latitude=lat,
+        longitude=lon,
+    ))
 
 
 async def handle_group_text(
-    msg, decrypted: dict | None, rx_time: int, snr: float, rssi: int, path: str,
-    channel_name: str, client: PotatoClient
+    msg, decrypted: dict | None, rx_time: int, snr: float, rssi: int,
+    channel_name: str, device_id: str, bus: EventBus
 ) -> None:
-    """GroupTextPayload → message (public channels only).
+    """GroupTextPayload -> ChatMessage event (public channels only).
 
     decrypted is our own decryption result (dict with sender/text/timestamp keys),
     None if we couldn't decrypt (unknown channel or MAC failure).
@@ -182,7 +182,6 @@ async def handle_group_text(
 
     text = decrypted.get("text", "")
     sender = decrypted.get("sender", "")
-    channel = decrypted.get("channel", 0)
 
     decrypted_ok = bool(text or sender)
 
@@ -199,26 +198,22 @@ async def handle_group_text(
     else:
         from_id = ""
 
-    # potato-mesh parses sender name from "SenderName: body" text format
-    full_text = f"{sender}: {text}" if sender and text else text
+    msg_id = _derive_msg_id(channel_hash, from_id, format_chat_text(sender or "", text))
 
-    msg_id = _derive_msg_id(channel_hash, from_id, full_text)
     if decrypted_ok:
         log.info("group_text", sender=sender, from_id=from_id, channel_name=channel_name, text=text[:60])
 
-    await client.send_message({
-        "id": msg_id,
-        "rx_time": rx_time,
-        "from_id": from_id,
-        "to_id": "^all",
-        "channel": 0,
-        "channel_name": channel_name,
-        "text": full_text,
-        "portnum": "TEXT_MESSAGE_APP",
-        "snr": snr,
-        "rssi": rssi,
-        "lora_freq": client.lora_freq,
-        "modem_preset": client.modem_preset,
-    })
-
-
+    await bus.publish(ChatMessage(
+        msg_id=msg_id,
+        rx_time=rx_time,
+        from_id=from_id,
+        sender=sender or "",
+        text=text,
+        channel_name=channel_name,
+        channel_hash=channel_hash,
+        snr=snr,
+        rssi=rssi,
+        lora_freq=state.lora_freq,
+        modem_preset=state.modem_preset,
+        repeater=repeater_name(device_id),
+    ))

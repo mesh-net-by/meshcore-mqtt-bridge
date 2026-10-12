@@ -9,8 +9,10 @@ from aiomqtt import Client as MqttClient, MqttError, ProtocolVersion
 
 from .config import settings
 from .handlers import _modem_preset as parse_modem_preset
-from .potato_client import PotatoClient
+from .bus import EventBus
 from .processor import process_message
+from .sinks import build_sinks
+from .state import state
 
 structlog.configure(
     wrapper_class=structlog.make_filtering_bound_logger(
@@ -20,24 +22,12 @@ structlog.configure(
 
 log = structlog.get_logger()
 
-HEARTBEAT_INTERVAL = 60       # seconds
-HEARTBEAT_INITIAL_DELAY = 15  # wait for first status before first heartbeat
 RECONNECT_DELAY = 5           # seconds on MQTT disconnect
 RETAIN_CLEANUP_INTERVAL = 3600  # run cleanup every hour
 RETAIN_MAX_AGE = 6 * 3600       # clear retained messages older than 6 hours
 
 
-async def heartbeat_loop(potato: PotatoClient) -> None:
-    await asyncio.sleep(HEARTBEAT_INITIAL_DELAY)
-    while True:
-        try:
-            await potato.heartbeat()
-        except Exception:
-            log.exception("heartbeat_failed")
-        await asyncio.sleep(HEARTBEAT_INTERVAL)
-
-
-async def _prefetch_lora_info(potato: PotatoClient) -> None:
+async def _prefetch_lora_info() -> None:
     """Subscribe briefly to status topics to get radio params before processing packets."""
     status_topic = f"{settings.mqtt_topic_prefix}/+/+/status"
     try:
@@ -58,7 +48,8 @@ async def _prefetch_lora_info(potato: PotatoClient) -> None:
                             if isinstance(radio_raw, str) and radio_raw:
                                 lora_freq = float(radio_raw.split(",")[0])
                                 modem_preset = parse_modem_preset(radio_raw)
-                                await potato.set_repeater_lora_info(lora_freq, modem_preset)
+                                state.lora_freq = lora_freq
+                                state.modem_preset = modem_preset
                                 log.info("lora_prefetched", lora_freq=lora_freq, modem_preset=modem_preset)
                         except Exception:
                             pass
@@ -116,13 +107,14 @@ async def _retain_cleanup_loop() -> None:
 
 
 async def run() -> None:
-    potato = PotatoClient()
-    log.info("starting", ingestor=settings.ingestor_name, topic=settings.mqtt_shared_topic)
+    bus = EventBus(build_sinks(settings.enabled_sinks))
+    log.info("starting", ingestor=settings.ingestor_name, topic=settings.mqtt_shared_topic,
+             sinks=[sink.name for sink in bus.sinks])
 
-    await _prefetch_lora_info(potato)
+    await _prefetch_lora_info()
 
     _bg_tasks: set[asyncio.Task] = set()
-    for coro in (heartbeat_loop(potato), _retain_cleanup_loop()):
+    for coro in (*(sink.run() for sink in bus.sinks), _retain_cleanup_loop()):
         t = asyncio.create_task(coro)
         _bg_tasks.add(t)
         t.add_done_callback(_bg_tasks.discard)
@@ -141,7 +133,7 @@ async def run() -> None:
                 log.info("subscribed", topic=settings.mqtt_shared_topic)
 
                 async for msg in mqtt.messages:
-                    t = asyncio.create_task(process_message(msg, potato, mqtt))
+                    t = asyncio.create_task(process_message(msg, bus, mqtt))
                     _bg_tasks.add(t)
                     t.add_done_callback(_bg_tasks.discard)
 

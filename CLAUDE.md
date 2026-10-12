@@ -2,8 +2,9 @@
 
 ## What This Is
 
-An ingestor that reads MeshCore node data from an MQTT broker (published by
-MeshCore repeater firmware) and forwards it to the potato-mesh map API.
+A bridge that reads MeshCore node data from an MQTT broker (published by
+MeshCore repeater firmware), normalizes it into events and fans them out to
+pluggable **sinks** (currently: potato-mesh map API; more, e.g. Telegram, can be added).
 
 **Why:** The existing potato-mesh MeshCore ingestor requires a direct companion
 node connection. The VBart/MeshCoreTel-firmware fork publishes all received
@@ -240,25 +241,63 @@ MeshCore Repeater Firmware (VBart fork)
   │  Consumer Instance (1..N)                       │
   │                                                 │
   │  subtopic == "status"                           │
-  │    → handle_status() → /api/nodes + /api/telemetry │
+  │    → handle_status()  → RepeaterStatus event    │
   │                                                 │
   │  subtopic == "packets"                          │
+  │    → PacketSeen event                           │
   │    → meshcoredecoder.decode(raw_hex)            │
   │    → route by PayloadType:                      │
-  │        Advert    → /api/nodes + /api/positions  │
+  │        Advert    → NodeAdvert event             │
   │        GroupText → _decrypt_group_text()        │
-  │                    → /api/messages              │
-  │        Path/Trace → DROP (unhandled)             │
+  │                    → ChatMessage event          │
+  │        Path/Trace → DROP (unhandled)            │
   │        TextMessage → DROP (DM)                  │
   │                                                 │
   │  subtopic == "raw" → DROP                       │
   │  After processing: clear MQTT retain            │
-  └─────────────────────────────────────────────────┘
-        │
-        │  POST JSON + Bearer token
-        ▼
+  └──────────────────┬──────────────────────────────┘
+                     │  EventBus.publish(event)
+          ┌──────────┴──────────┐
+          ▼                     ▼
+     PotatoSink            TelegramSink
+          │  POST JSON + Bearer token
+          ▼
    potato-mesh API
 ```
+
+### Events and Sinks
+
+Core (`processor.py` + `handlers.py`) never talks to a destination directly. It
+publishes normalized events (`src/ingestor/events.py`) to an `EventBus`, which
+fans each event out to every enabled sink concurrently. A failing sink is logged
+(`sink_failed`) and never affects the others.
+
+| Event | Produced from | Notes |
+|---|---|---|
+| `PacketSeen` | every `packets` message | counter for heartbeat stats |
+| `RepeaterStatus` | `status` subtopic | repeater node, battery/uptime, radio params |
+| `NodeAdvert` | Advert packet | node info + optional lat/lon |
+| `ChatMessage` | GroupText packet | `sender`, `text`, `channel_name`, `repeater` (name of the hearing repeater, resolved from MQTT topic device_id via `status` names); `full_text` = `"Sender: body"` |
+
+Sinks are enabled with `SINKS` (comma-separated, default `potato`). A sink
+subclasses `Sink` (`sinks/base.py`): `handle(event)` (ignore unknown event types),
+optional `run()` background task, optional `aclose()`. Register it in
+`sinks/__init__.py:build_sinks()`. Shared repeater facts (node id, LoRa params)
+live in `state.py` — core writes them, sinks read them.
+
+`sinks/potato.py` (`PotatoSink`) owns everything potato-specific: HTTP client,
+event → API mapping, the 60 s `/api/ingestors` heartbeat. `POTATO_HOST` and
+`POTATO_API_TOKEN` are required only when `potato` is in `SINKS`.
+
+`sinks/telegram.py` (`TelegramSink`) talks to the Telegram Bot API via `httpx`
+(no extra dependency). It forwards only `ChatMessage` events with non-empty
+`text`, optionally filtered by `TELEGRAM_CHANNELS_RAW`, formatted as HTML
+(template from `TELEGRAM_FORMAT`, default `<b>#{channel}</b> · {sender}\n{text}\n<i>{repeater} · SNR {snr} · RSSI {rssi}</i>`;
+placeholder values are `html.escape`d; lines with all-empty placeholders are dropped; the
+message body is never altered by separator cleanup; unknown placeholders raise at startup), deduplicated by
+`msg_id` (bounded in-memory cache), serialized with a lock and one retry on HTTP
+429. The bot token lives in the request URL: never log URLs or use
+`raise_for_status()` there. Requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
 
 ### Multiple Consumers (Competing Consumers Pattern)
 
@@ -293,11 +332,14 @@ After processing any retained message, publish `b""` to the same topic with
 
 | File | Purpose |
 |---|---|
-| `src/ingestor/config.py` | Settings via pydantic-settings; `channels` property parses `CHANNELS_RAW` |
+| `src/ingestor/config.py` | Settings via pydantic-settings; `channels` parses `CHANNELS_RAW`, `enabled_sinks` parses `SINKS` |
 | `src/ingestor/processor.py` | MQTT message router; `_decrypt_group_text()` custom crypto |
-| `src/ingestor/handlers.py` | Maps decoded objects to potato-mesh API calls |
-| `src/ingestor/potato_client.py` | HTTP client wrapping potato-mesh endpoints |
-| `src/ingestor/main.py` | Entry point: MQTT connection loop + heartbeat task |
+| `src/ingestor/handlers.py` | Maps decoded objects to bridge events (no destination-specific code) |
+| `src/ingestor/events.py` | Event dataclasses shared by core and sinks |
+| `src/ingestor/bus.py` | `EventBus`: fan-out to sinks, isolates sink failures |
+| `src/ingestor/state.py` | Repeater node id / LoRa params learned from `status` |
+| `src/ingestor/sinks/` | `base.py` (Sink ABC), `potato.py` (potato-mesh), `telegram.py` (Telegram), `build_sinks()` registry |
+| `src/ingestor/main.py` | Entry point: MQTT connection loop, sink background tasks, retain cleanup |
 
 ---
 

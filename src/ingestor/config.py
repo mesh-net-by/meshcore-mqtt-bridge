@@ -1,6 +1,13 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_TELEGRAM_FORMAT = (
+    "<b>#{channel}</b> · {sender}\n"
+    "{text}\n"
+    "<i>{repeater} · SNR {snr} · RSSI {rssi}</i>"
+)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -13,10 +20,22 @@ class Settings(BaseSettings):
     # Shared subscription group — all replicas share load, each message processed once
     mqtt_consumer_group: str = "ingestor-group"
 
-    # potato-mesh
-    potato_host: str
-    potato_api_token: str
+    # Comma-separated sinks that receive events, e.g. "potato" or "potato,telegram"
+    sinks: str = "potato"
     ingestor_name: str = "mqtt-ingestor"
+
+    # potato-mesh sink (required when "potato" is in SINKS)
+    potato_host: str = ""
+    potato_api_token: str = ""
+
+    # Telegram sink (required when "telegram" is in SINKS)
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    # Comma-separated channel names to forward to Telegram; empty = all decrypted channels
+    telegram_channels_raw: str = ""
+    # Message template (Telegram HTML). Placeholders: {channel} {sender} {text} {repeater}
+    # {snr} {rssi} {freq} {preset} {time} {from_id}. Use \\n for a line break.
+    telegram_format: str = DEFAULT_TELEGRAM_FORMAT
 
     # Comma-separated public channel names (without #), e.g. "test,news,general".
     # Keys are derived automatically from names.
@@ -34,6 +53,15 @@ class Settings(BaseSettings):
     def channels(self) -> list[str]:
         raw = self.channels_raw.strip()
         return [n.strip() for n in raw.split(",") if n.strip()] if raw else []
+
+    @property
+    def telegram_channels(self) -> list[str]:
+        raw = self.telegram_channels_raw.strip()
+        return [n.strip() for n in raw.split(",") if n.strip()] if raw else []
+
+    @property
+    def enabled_sinks(self) -> list[str]:
+        return [n.strip().lower() for n in self.sinks.split(",") if n.strip()]
 
     @property
     def mqtt_shared_topic(self) -> str:

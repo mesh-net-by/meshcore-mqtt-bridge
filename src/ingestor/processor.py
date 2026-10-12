@@ -19,8 +19,9 @@ from meshcoredecoder import MeshCoreDecoder
 from meshcoredecoder.types import PayloadType
 
 from .config import settings
+from .bus import EventBus
+from .events import PacketSeen
 from .handlers import handle_advert, handle_group_text, handle_status
-from .potato_client import PotatoClient
 
 log = structlog.get_logger()
 
@@ -117,7 +118,7 @@ for _name in settings.channels:
     _register_channel(_name)
 
 
-async def process_message(msg: Message, potato: PotatoClient, mqtt: MqttClient) -> None:
+async def process_message(msg: Message, bus: EventBus, mqtt: MqttClient) -> None:
     topic = str(msg.topic)
     parts = topic.split("/")
 
@@ -138,11 +139,11 @@ async def process_message(msg: Message, potato: PotatoClient, mqtt: MqttClient) 
     try:
         if subtopic == "status":
             log.debug("status_payload", payload=payload)
-            await handle_status(payload, potato)
+            await handle_status(payload, bus)
 
         elif subtopic == "packets":
-            potato.count_packet()
-            await _process_packet(payload, potato)
+            await bus.publish(PacketSeen())
+            await _process_packet(payload, parts[2], bus)
 
         elif subtopic == "raw":
             # raw duplicates packets without RF metadata — retain cleared below
@@ -158,14 +159,13 @@ async def process_message(msg: Message, potato: PotatoClient, mqtt: MqttClient) 
         await _clear_retain(mqtt, topic, msg.retain)
 
 
-async def _process_packet(payload: dict, potato: PotatoClient) -> None:
+async def _process_packet(payload: dict, device_id: str, bus: EventBus) -> None:
     raw_hex = payload.get("raw") or payload.get("data", "")
     if not raw_hex:
         return
 
     snr: float = float(payload.get("SNR", 0.0))
     rssi: int = int(payload.get("RSSI", 0))
-    path: str = payload.get("path", "")
     rx_time: int = _parse_timestamp(payload.get("timestamp"))
 
     try:
@@ -184,7 +184,7 @@ async def _process_packet(payload: dict, potato: PotatoClient) -> None:
     log.debug("decoded_packet", ptype=ptype.name if ptype else None, inner=str(inner)[:120])
 
     if ptype == PayloadType.Advert:
-        await handle_advert(inner, rx_time, snr, rssi, potato)
+        await handle_advert(inner, rx_time, snr, rssi, bus)
 
     elif ptype == PayloadType.GroupText:
         decrypted = None
@@ -192,7 +192,7 @@ async def _process_packet(payload: dict, potato: PotatoClient) -> None:
         if inner is not None:
             decrypted = _decrypt_group_text(ch, getattr(inner, "cipher_mac", ""), getattr(inner, "ciphertext", ""))
         ch_name = _CHANNEL_NAMES.get(str(ch).lower(), "")
-        await handle_group_text(inner, decrypted, rx_time, snr, rssi, path, ch_name, potato)
+        await handle_group_text(inner, decrypted, rx_time, snr, rssi, ch_name, device_id, bus)
 
     elif ptype == PayloadType.TextMessage:
         # Private/direct message — never forward
