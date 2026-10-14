@@ -26,8 +26,6 @@ services:
     depends_on:
       mosquitto:
         condition: service_healthy
-    deploy:
-      replicas: ${INGESTOR_REPLICAS:-1}
     logging:
       driver: "json-file"
       options:

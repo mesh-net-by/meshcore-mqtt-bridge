@@ -279,15 +279,17 @@ fans each event out to every enabled sink concurrently. A failing sink is logged
 | `NodeAdvert` | Advert packet | node info + optional lat/lon |
 | `ChatMessage` | GroupText packet | `sender`, `text`, `channel_name`, `repeater` (name of the hearing repeater, resolved from MQTT topic device_id via `status` names); `full_text` = `"Sender: body"` |
 
-Sinks are enabled with `SINKS` (comma-separated, default `potato`). A sink
+Sinks are enabled with `SINKS` (comma-separated). `.env.example` and the docs
+use `telegram` as the primary sink; the code default in `config.py` is still `potato`. A sink
 subclasses `Sink` (`sinks/base.py`): `handle(event)` (ignore unknown event types),
 optional `run()` background task, optional `aclose()`. Register it in
 `sinks/__init__.py:build_sinks()`. Shared repeater facts (node id, LoRa params)
 live in `state.py` — core writes them, sinks read them.
 
 `sinks/potato.py` (`PotatoSink`) owns everything potato-specific: HTTP client,
-event → API mapping, the 60 s `/api/ingestors` heartbeat. `POTATO_HOST` and
-`POTATO_API_TOKEN` are required only when `potato` is in `SINKS`.
+event → API mapping, the 60 s `/api/ingestors` heartbeat. `POTATO_HOST`,
+`POTATO_API_TOKEN` and (by convention, unique per deployment) `POTATO_INGESTOR_NAME`
+are required only when `potato` is in `SINKS`.
 
 `sinks/telegram.py` (`TelegramSink`) talks to the Telegram Bot API via `httpx`
 (no extra dependency). It forwards only `ChatMessage` events with non-empty
@@ -298,6 +300,22 @@ message body is never altered by separator cleanup; unknown placeholders raise a
 `msg_id` (bounded in-memory cache), serialized with a lock and one retry on HTTP
 429. The bot token lives in the request URL: never log URLs or use
 `raise_for_status()` there. Requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
+
+### Environment Variables
+
+Source of truth: `config.py`; documented in `.env.example` and README. Grouping
+(keep it in all three): MQTT first, then `SINKS`, then per-sink required vars, then optional.
+
+| Group | Variables |
+|---|---|
+| MQTT (required) | `MQTT_USERNAME`, `MQTT_PASSWORD` |
+| MQTT (optional) | `MQTT_HOST` (`mosquitto` in Docker, `localhost` outside), `MQTT_PORT`, `MQTT_TOPIC_PREFIX`, `MQTT_CONSUMER_GROUP` |
+| Sinks | `SINKS` |
+| telegram (required) | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` |
+| potato (required) | `POTATO_HOST`, `POTATO_API_TOKEN`, `POTATO_INGESTOR_NAME` |
+| Optional | `CHANNELS_RAW`, `TELEGRAM_CHANNELS_RAW`, `TELEGRAM_FORMAT`, `REPEATER_NODE_ID` (potato heartbeat), `LOG_LEVEL` |
+
+There is no replicas variable: scale with `docker compose up -d --scale ingestor=N`.
 
 ### Multiple Consumers (Competing Consumers Pattern)
 

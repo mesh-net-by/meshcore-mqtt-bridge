@@ -1,8 +1,9 @@
 # meshcore-mqtt-bridge
 
 Reads MeshCore node data from an MQTT broker and forwards it to pluggable
-sinks. Built-in sink: a [potato-mesh](https://github.com/l5yth/potato-mesh) map
-instance. Sinks are enabled with `SINKS` (default `potato`).
+sinks. Built-in sinks: **Telegram** (channel messages → chat, the recommended
+default) and a [potato-mesh](https://github.com/l5yth/potato-mesh) map
+instance. Sinks are enabled with `SINKS` (this README assumes `telegram`).
 
 **Why:** The existing potato-mesh MeshCore ingestor requires a direct companion
 node connection. This ingestor works with the
@@ -14,22 +15,45 @@ fork, which publishes all received packets to MQTT — no companion node needed.
 ## How It Works
 
 ```
-MeshCore Repeater (VBart firmware)
-        │  MQTT publish  meshcore/{iata}/{device_id}/{status|packets|raw}
-        ▼
-   Mosquitto Broker  (included via Docker Compose)
-        │  $share/ingestor-group/meshcore/#
-        ▼
-   Bridge core (this project)
-   ├── status   → RepeaterStatus event
-   ├── packets  → decoded with meshcoredecoder
-   │   ├── Advert     → NodeAdvert event
-   │   ├── GroupText  → ChatMessage event (public channels, decrypted)
-   │   └── Path/Trace → discarded
-   └── raw / unknown → discarded, retain cleared
-        │  EventBus → every enabled sink
-        ▼
-   potato sink → potato-mesh API
+┌──────────────────────────┐
+│ MeshCore Repeater        │
+│ (VBart firmware)         │
+└────────────┬─────────────┘
+             │ MQTT publish
+             │ meshcore/{iata}/{device_id}/{status|packets|raw}
+             ▼
+┌──────────────────────────┐
+│ Mosquitto broker         │
+│ (Docker Compose)         │
+└────────────┬─────────────┘
+             │ shared subscription
+             │ $share/ingestor-group/meshcore/#
+             ▼
+┌───────────────────────────────────────────────────────┐
+│ Ingestor (1..N replicas)                              │
+│                                                       │
+│  status  ──────────────────────► RepeaterStatus       │
+│  packets ─► meshcoredecoder                           │
+│              ├─ Advert     ────► NodeAdvert           │
+│              ├─ GroupText  ────► ChatMessage          │
+│              │   (key derived from channel name,      │
+│              │    decrypted, filtered by CHANNELS_RAW)│
+│              └─ Path/Trace/DM ─► dropped              │
+│  raw / unknown ────────────────► dropped, retain      │
+│                                  cleared              │
+└────────────┬──────────────────────────────────────────┘
+             │ EventBus (fan-out, a failing sink never
+             │ affects the others)
+      ┌──────┴────────────────┐
+      ▼                       ▼
+┌───────────────┐      ┌───────────────┐
+│ Telegram sink │      │ Potato sink   │
+│ (default)     │      │ (optional)    │
+└──────┬────────┘      └──────┬────────┘
+       ▼                      ▼
+ Telegram Bot API      potato-mesh API
+ (ChatMessage only)    (nodes, messages, positions,
+                        telemetry, heartbeat)
 ```
 
 Multiple ingestor replicas can run in parallel — MQTT shared subscriptions
@@ -42,8 +66,10 @@ ensure each message is processed by exactly one replica.
 - Docker & Docker Compose v2
 - A MeshCore repeater running VBart/MeshCoreTel-firmware with MQTT pointing at
   this broker
-- A running [potato-mesh](https://github.com/l5yth/potato-mesh) instance with
-  an API token
+- A Telegram bot token from [@BotFather](https://t.me/BotFather) and a target
+  chat id (for the default `telegram` sink)
+- *Optional:* a running [potato-mesh](https://github.com/l5yth/potato-mesh)
+  instance with an API token (only if you enable the `potato` sink)
 
 ---
 
@@ -57,20 +83,46 @@ cd meshcore-mqtt-bridge
 cp .env.example .env   # then edit .env
 ```
 
-Key variables in `.env`:
+`.env.example` ships with `SINKS=telegram`. Note that without `SINKS` the code
+falls back to `potato`.
+
+Variables in `.env`:
+
+**MQTT** (always)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `MQTT_USERNAME` / `MQTT_PASSWORD` | yes | — | Broker credentials (must match the Mosquitto passwd file) |
+| `MQTT_HOST` | no | `localhost` | Broker address (in Docker Compose set `MQTT_HOST=mosquitto`) |
+| `MQTT_PORT` | no | `1883` | Broker port |
+| `MQTT_TOPIC_PREFIX` | no | `meshcore` | Topic prefix |
+| `MQTT_CONSUMER_GROUP` | no | `ingestor-group` | Shared subscription group |
+
+**Required for the `telegram` sink** (`SINKS` contains `telegram`)
 
 | Variable | Description |
 |---|---|
-| `MQTT_USERNAME` / `MQTT_PASSWORD` | Broker credentials (must match passwd file) |
-| `SINKS` | Comma-separated sinks to enable (default `potato`) |
-| `POTATO_HOST` | potato sink: potato-mesh base URL, e.g. `https://map.example.com` |
-| `POTATO_API_TOKEN` | potato sink: potato-mesh API bearer token |
-| `POTATO_INGESTOR_NAME` | potato sink: name shown in potato-mesh ingestors list |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | telegram sink: bot token from @BotFather and target chat id |
-| `TELEGRAM_CHANNELS_RAW` | telegram sink: channel names to forward, e.g. `news,test`. Empty = all decrypted channels |
-| `TELEGRAM_FORMAT` | telegram sink: message template, see [Telegram Sink](#telegram-sink) |
-| `CHANNELS_RAW` | Comma-separated channel names to forward, e.g. `test,news`. Empty = all public channels |
-| `REPEATER_NODE_ID` | Optional: repeater node id (e.g. `!3c15e67e`) for heartbeat before first status arrives |
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
+| `TELEGRAM_CHAT_ID` | Target chat id, e.g. `-1001234567890` |
+
+**Required for the `potato` sink** (`SINKS` contains `potato`)
+
+| Variable | Description |
+|---|---|
+| `POTATO_HOST` | potato-mesh base URL, e.g. `https://map.example.com` |
+| `POTATO_API_TOKEN` | potato-mesh API bearer token |
+| `POTATO_INGESTOR_NAME` | Name of this ingestor in potato-mesh, sent as `ingestor` with every payload. Set a unique one per deployment (the code falls back to `mqtt-ingestor`, which would collide between installations) |
+
+**Optional**
+
+| Variable | Default | Description |
+|---|---|---|
+| `SINKS` | `potato` (code default) | Comma-separated sinks: `telegram`, `potato`. Set to `telegram` for Telegram only |
+| `CHANNELS_RAW` | empty | Channel names to decrypt/forward, e.g. `test,news`. Empty = all public channels |
+| `TELEGRAM_CHANNELS_RAW` | empty | Telegram only: channel names to forward. Empty = all decrypted channels |
+| `TELEGRAM_FORMAT` | built-in template | Telegram message template, see [Telegram Sink](#telegram-sink) |
+| `REPEATER_NODE_ID` | empty | potato only: repeater node id (e.g. `!3c15e67e`) for heartbeat before the first `status` arrives; learned automatically |
+| `LOG_LEVEL` | `INFO` | Log level |
 
 ### 2. Create Mosquitto password file
 
@@ -122,12 +174,6 @@ Run multiple replicas to handle higher message volume:
 
 ```bash
 docker compose up -d --scale ingestor=3
-```
-
-Or set permanently in `.env`:
-
-```env
-INGESTOR_REPLICAS=3
 ```
 
 Each MQTT message is delivered to exactly one replica — no duplicate processing.
@@ -182,13 +228,12 @@ Forwards decrypted channel messages to a Telegram chat. Default message:
 💬 Text: Potato
 ```
 
-Enable with `SINKS=potato,telegram` (or `telegram`
-alone).
+Enable with `SINKS=telegram` (or `SINKS=telegram,potato` to also feed the map).
 
 1. Create a bot with [@BotFather](https://t.me/BotFather), copy the token.
 2. Add the bot to your group/channel (as admin for channels).
 3. Get the chat id (e.g. `-1001234567890`) and set `TELEGRAM_BOT_TOKEN`,
-   `TELEGRAM_CHAT_ID` in `.env`.
+   `TELEGRAM_CHAT_ID` in `.env` (both required).
 4. Optionally limit channels with `TELEGRAM_CHANNELS_RAW=news,test`.
 
 ### Message template
@@ -223,7 +268,7 @@ multiple ingestor replicas a message may be duplicated.
    `handle(event)` (ignore event types you don't care about); optionally `run()`
    for a background task and `aclose()`.
 2. Register it in `build_sinks()` in `src/ingestor/sinks/__init__.py`.
-3. Enable it: `SINKS=potato,<name>`.
+3. Enable it: `SINKS=telegram,<name>`.
 
 ---
 
