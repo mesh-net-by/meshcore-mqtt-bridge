@@ -30,7 +30,7 @@ fork, which publishes all received packets to MQTT — no companion node needed.
              │ $share/ingestor-group/meshcore/#
              ▼
 ┌───────────────────────────────────────────────────────┐
-│ Ingestor (1..N replicas)                              │
+│ Ingestor                                              │
 │                                                       │
 │  status  ──────────────────────► RepeaterStatus       │
 │  packets ─► meshcoredecoder                           │
