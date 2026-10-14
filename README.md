@@ -86,43 +86,28 @@ cp .env.example .env   # then edit .env
 `.env.example` ships with `SINKS=telegram`. Note that without `SINKS` the code
 falls back to `potato`.
 
-Variables in `.env`:
-
-**MQTT** (always)
+Variables in `.env`. **Required** column: `yes` = always, `telegram` / `potato` =
+only when that sink is in `SINKS`, `no` = optional.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `MQTT_USERNAME` / `MQTT_PASSWORD` | yes | — | Broker credentials (must match the Mosquitto passwd file) |
-| `MQTT_HOST` | no | `localhost` | Broker address (in Docker Compose set `MQTT_HOST=mosquitto`) |
+| `MQTT_USERNAME` | yes | — | Broker username (must match the Mosquitto passwd file) |
+| `MQTT_PASSWORD` | yes | — | Broker password |
+| `MQTT_HOST` | no | `localhost` | Broker address (in Docker Compose set `mosquitto`) |
 | `MQTT_PORT` | no | `1883` | Broker port |
 | `MQTT_TOPIC_PREFIX` | no | `meshcore` | Topic prefix |
 | `MQTT_CONSUMER_GROUP` | no | `ingestor-group` | Shared subscription group |
-
-**Required for the `telegram` sink** (`SINKS` contains `telegram`)
-
-| Variable | Description |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `TELEGRAM_CHAT_ID` | Target chat id, e.g. `-1001234567890` |
-
-**Required for the `potato` sink** (`SINKS` contains `potato`)
-
-| Variable | Description |
-|---|---|
-| `POTATO_HOST` | potato-mesh base URL, e.g. `https://map.example.com` |
-| `POTATO_API_TOKEN` | potato-mesh API bearer token |
-| `POTATO_INGESTOR_NAME` | Name of this ingestor in potato-mesh, sent as `ingestor` with every payload. Set a unique one per deployment (the code falls back to `mqtt-ingestor`, which would collide between installations) |
-
-**Optional**
-
-| Variable | Default | Description |
-|---|---|---|
-| `SINKS` | `potato` (code default) | Comma-separated sinks: `telegram`, `potato`. Set to `telegram` for Telegram only |
-| `CHANNELS_RAW` | empty | Channel names to decrypt/forward, e.g. `test,news`. Empty = all public channels |
-| `TELEGRAM_CHANNELS_RAW` | empty | Telegram only: channel names to forward. Empty = all decrypted channels |
-| `TELEGRAM_FORMAT` | built-in template | Telegram message template, see [Telegram Sink](#telegram-sink) |
-| `REPEATER_NODE_ID` | empty | potato only: repeater node id (e.g. `!3c15e67e`) for heartbeat before the first `status` arrives; learned automatically |
-| `LOG_LEVEL` | `INFO` | Log level |
+| `SINKS` | yes | `potato` (code default) | Comma-separated sinks: `telegram`, `potato`. `.env.example` sets `telegram` |
+| `TELEGRAM_BOT_TOKEN` | telegram | — | Bot token from @BotFather |
+| `TELEGRAM_CHAT_ID` | telegram | — | Target chat id, e.g. `-1001234567890` |
+| `TELEGRAM_CHANNELS_RAW` | no | empty | Channel names to forward to Telegram. Empty = all decrypted channels |
+| `TELEGRAM_FORMAT` | no | built-in template | Message template, see [Telegram Sink](#telegram-sink) |
+| `POTATO_HOST` | potato | — | potato-mesh base URL, e.g. `https://map.example.com` |
+| `POTATO_API_TOKEN` | potato | — | potato-mesh API bearer token |
+| `POTATO_INGESTOR_NAME` | potato | `mqtt-ingestor` | Ingestor name sent with every payload. Set a unique one per deployment, the default collides between installations |
+| `REPEATER_NODE_ID` | no | empty | potato heartbeat: repeater node id (e.g. `!3c15e67e`) before the first `status`; learned automatically |
+| `CHANNELS_RAW` | no | empty | Channel names to decrypt/forward, e.g. `test,news`. Empty = all public channels |
+| `LOG_LEVEL` | no | `INFO` | Log level |
 
 ### 2. Create Mosquitto password file
 
